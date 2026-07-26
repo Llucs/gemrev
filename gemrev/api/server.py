@@ -134,30 +134,35 @@ if FastAPI is not None:
 
             async def stream():
                 chat = client.new_chat(model=model)
-                first = True
+                yield f'data: {_json.dumps(build_stream_chunk(msg_id, now, req.model, {"role": "assistant"}))}\n\n'
+                buf = []
+                tool_calls_result = None
                 try:
                     async for chunk in chat.generate_content_stream(
                         prompt=last_user.content or '',
                         messages=msg_dicts,
                         tools=tools,
                     ):
-                        if first:
+                        if not resolved_model_holder[0] or resolved_model_holder[0] == req.model:
                             resolved_model_holder[0] = chunk.model or req.model
-                            yield f'data: {_json.dumps(build_stream_chunk(msg_id, now, resolved_model_holder[0], {"role": "assistant"}))}\n\n'
-                            first = False
 
                         if hasattr(chunk, 'candidates') and chunk.candidates:
                             tc = getattr(chunk.candidates[0], '_tool_calls', None)
                             if tc:
-                                yield f'data: {_json.dumps(build_stream_chunk(msg_id, now, resolved_model_holder[0], {"tool_calls": tc}, "tool_calls"))}\n\n'
-                                yield 'data: [DONE]\n\n'
-                                return
+                                tool_calls_result = tc
+                                break
 
                         if chunk.text_delta:
-                            yield f'data: {_json.dumps(build_stream_chunk(msg_id, now, resolved_model_holder[0], {"content": chunk.text_delta}))}\n\n'
+                            buf.append(chunk.text_delta)
                 except Exception as e:
                     logger.exception('stream failed')
-                yield f'data: {_json.dumps(build_stream_chunk(msg_id, now, resolved_model_holder[0], {}, "stop"))}\n\n'
+
+                if tool_calls_result:
+                    yield f'data: {_json.dumps(build_stream_chunk(msg_id, now, resolved_model_holder[0], {"tool_calls": tool_calls_result}, "tool_calls"))}\n\n'
+                else:
+                    for delta in buf:
+                        yield f'data: {_json.dumps(build_stream_chunk(msg_id, now, resolved_model_holder[0], {"content": delta}))}\n\n'
+                    yield f'data: {_json.dumps(build_stream_chunk(msg_id, now, resolved_model_holder[0], {}, "stop"))}\n\n'
                 yield 'data: [DONE]\n\n'
 
             return StreamingResponse(stream(), media_type='text/event-stream')

@@ -136,22 +136,29 @@ class ChatSession:
         return output
 
     async def generate_content_stream(self, prompt='', files=None, deep_research=False,
-                                       extended_thinking=False, tools=None, messages=None,
-                                       mode_category=None):
+                                        extended_thinking=False, tools=None, messages=None,
+                                        mode_category=None):
         if not prompt and not messages:
             raise ValueError('Prompt or messages required.')
         if messages:
             prompt = self._messages_to_prompt(messages, tools)
         last_output = None
+        seen_tool_calls = False
         async for out in self.client._generate_content_stream(
             prompt=prompt, files=files, model=self.model, gem=self.gem,
             chat=self, temporary=self.temporary,
             deep_research=deep_research, extended_thinking=extended_thinking,
             mode_category=mode_category,
         ):
+            if not seen_tool_calls and out.text and tools:
+                clean, tcs = self._parse_tool_calls(out.text)
+                if tcs:
+                    seen_tool_calls = True
+                    out.candidates[out.chosen]._tool_calls = tcs
+                    out.candidates[out.chosen].text = clean
             last_output = out
             yield out
-        if last_output and last_output.text and tools:
+        if not seen_tool_calls and last_output and last_output.text and tools:
             clean, tcs = self._parse_tool_calls(last_output.text)
             if tcs:
                 last_output.candidates[last_output.chosen]._tool_calls = tcs
