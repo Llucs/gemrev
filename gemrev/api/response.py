@@ -55,7 +55,7 @@ def build_chat_response(result, prompt_text, model, system_fingerprint=None):
     choice_msg = {'role': 'assistant'}
 
     if tool_calls:
-        choice_msg['content'] = None if not text else text
+        choice_msg['content'] = None
         choice_msg['tool_calls'] = tool_calls
         finish_reason = 'tool_calls'
     else:

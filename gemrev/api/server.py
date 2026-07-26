@@ -88,9 +88,10 @@ if FastAPI is not None:
                 'role': 'system',
                 'content': (
                     'You have access to the following tools. '
-                    'When you need to use a tool, respond with: '
-                    '[TOOL_CALL]tool_name|{"arg1":"value1"}[/TOOL_CALL] '
-                    'and NOTHING else. Do not answer the question directly.'
+                    'When you need to use a tool, respond EXCLUSIVELY with:\n'
+                    '[TOOL_CALL]tool_name|{"arg1":"value1"}[/TOOL_CALL]\n'
+                    'Do NOT include any other text, explanation, or natural language. '
+                    'Your entire response must be ONLY the tool call — nothing before, nothing after.'
                 ),
             })
         for m in messages:
@@ -161,7 +162,7 @@ if FastAPI is not None:
 
                 if stream_ok:
                     if tool_calls_result:
-                        yield f'data: {_json.dumps(build_stream_chunk(msg_id, now, resolved_model_holder[0], {"tool_calls": tool_calls_result}, "tool_calls"))}\n\n'
+                        yield f'data: {_json.dumps(build_stream_chunk(msg_id, now, resolved_model_holder[0], {"content": None, "tool_calls": tool_calls_result}, "tool_calls"))}\n\n'
                     else:
                         for delta in buf:
                             yield f'data: {_json.dumps(build_stream_chunk(msg_id, now, resolved_model_holder[0], {"content": delta}))}\n\n'
