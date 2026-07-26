@@ -82,6 +82,25 @@ if FastAPI is not None:
                 ))
         return result if result else None
 
+    def _messages_to_dicts(messages, tools):
+        result = []
+        if tools:
+            result.append({
+                'role': 'system',
+                'content': (
+                    'You have access to the following tools. '
+                    'When you need to use a tool, respond with: '
+                    '[TOOL_CALL]tool_name|{"arg1":"value1"}[/TOOL_CALL] '
+                    'and NOTHING else. Do not answer the question directly.'
+                ),
+            })
+        for m in messages:
+            d = {'role': m.role}
+            if m.content is not None:
+                d['content'] = m.content
+            result.append(d)
+        return result
+
     @app.post('/v1/chat/completions')
     async def chat_completions(req: ChatRequest):
         if not req.messages:
@@ -106,6 +125,8 @@ if FastAPI is not None:
         client = _get_client(req)
         tools = _to_tool_definitions(req.tools)
 
+        msg_dicts = _messages_to_dicts(req.messages, tools)
+
         if req.stream:
             now = int(time())
             msg_id = f'chatcmpl-{uuid4().hex[:16]}'
@@ -117,7 +138,7 @@ if FastAPI is not None:
                 try:
                     async for chunk in chat.generate_content_stream(
                         prompt=last_user.content or '',
-                        messages=req.messages if len(req.messages) > 1 else None,
+                        messages=msg_dicts,
                         tools=tools,
                     ):
                         if first:
@@ -125,15 +146,12 @@ if FastAPI is not None:
                             yield f'data: {_json.dumps(build_stream_chunk(msg_id, now, resolved_model_holder[0], {"role": "assistant"}))}\n\n'
                             first = False
 
-                        tc = getattr(getattr(chunk, 'candidates', [None])[0] if chunk.candidates else None, '_tool_calls', None) if hasattr(chunk, 'candidates') else None
-                        if tc:
-                            tc_chunk = build_stream_chunk(
-                                msg_id, now, resolved_model_holder[0],
-                                {'tool_calls': tc}, 'tool_calls',
-                            )
-                            yield f'data: {_json.dumps(tc_chunk)}\n\n'
-                            yield 'data: [DONE]\n\n'
-                            return
+                        if hasattr(chunk, 'candidates') and chunk.candidates:
+                            tc = getattr(chunk.candidates[0], '_tool_calls', None)
+                            if tc:
+                                yield f'data: {_json.dumps(build_stream_chunk(msg_id, now, resolved_model_holder[0], {"tool_calls": tc}, "tool_calls"))}\n\n'
+                                yield 'data: [DONE]\n\n'
+                                return
 
                         if chunk.text_delta:
                             yield f'data: {_json.dumps(build_stream_chunk(msg_id, now, resolved_model_holder[0], {"content": chunk.text_delta}))}\n\n'
@@ -147,7 +165,7 @@ if FastAPI is not None:
         chat = client.new_chat(model=model)
         result = await chat.generate_content(
             prompt=last_user.content or '',
-            messages=req.messages if len(req.messages) > 1 else None,
+            messages=msg_dicts,
             tools=tools,
         )
         prompt_text = '\n'.join(f'{m.role}: {m.content}' for m in req.messages if m.content)
