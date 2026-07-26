@@ -5,10 +5,9 @@ from time import time
 from uuid import uuid4
 
 from gemrev import Gemini, Model, ToolDefinition
+from gemrev.api.response import build_chat_response, build_stream_chunk
 
 logger = logging.getLogger('gemrev')
-
-from gemrev.api.response import build_chat_response, build_stream_chunk
 
 try:
     from fastapi import FastAPI
@@ -137,6 +136,7 @@ if FastAPI is not None:
                 yield f'data: {_json.dumps(build_stream_chunk(msg_id, now, req.model, {"role": "assistant"}))}\n\n'
                 buf = []
                 tool_calls_result = None
+                stream_ok = True
                 try:
                     async for chunk in chat.generate_content_stream(
                         prompt=last_user.content or '',
@@ -154,15 +154,18 @@ if FastAPI is not None:
 
                         if chunk.text_delta:
                             buf.append(chunk.text_delta)
-                except Exception as e:
+                except Exception:
                     logger.exception('stream failed')
+                    stream_ok = False
+                    yield f'data: {_json.dumps({"error": {"message": "Stream failed", "type": "server_error"}})}\n\n'
 
-                if tool_calls_result:
-                    yield f'data: {_json.dumps(build_stream_chunk(msg_id, now, resolved_model_holder[0], {"tool_calls": tool_calls_result}, "tool_calls"))}\n\n'
-                else:
-                    for delta in buf:
-                        yield f'data: {_json.dumps(build_stream_chunk(msg_id, now, resolved_model_holder[0], {"content": delta}))}\n\n'
-                    yield f'data: {_json.dumps(build_stream_chunk(msg_id, now, resolved_model_holder[0], {}, "stop"))}\n\n'
+                if stream_ok:
+                    if tool_calls_result:
+                        yield f'data: {_json.dumps(build_stream_chunk(msg_id, now, resolved_model_holder[0], {"tool_calls": tool_calls_result}, "tool_calls"))}\n\n'
+                    else:
+                        for delta in buf:
+                            yield f'data: {_json.dumps(build_stream_chunk(msg_id, now, resolved_model_holder[0], {"content": delta}))}\n\n'
+                        yield f'data: {_json.dumps(build_stream_chunk(msg_id, now, resolved_model_holder[0], {}, "stop"))}\n\n'
                 yield 'data: [DONE]\n\n'
 
             return StreamingResponse(stream(), media_type='text/event-stream')

@@ -11,7 +11,7 @@ from .constants import (
     TEMPORARY_CHAT_FLAG_INDEX, STREAMING_FLAG_INDEX, GEM_FLAG_INDEX,
     CARD_CONTENT_RE, ARTIFACTS_RE, DEFAULT_METADATA, MODEL_HEADER_KEY,
 )
-from .errors import APIError, GeminiError, UsageLimitExceeded, ModelInvalid, TemporarilyBlocked, AuthError
+from .errors import APIError, GeminiError, UsageLimitExceeded, ModelInvalid, TemporarilyBlocked
 from .types.model import AvailableModel, RPCData
 from .types.output import Candidate, ModelOutput
 from .types.media import WebImage, GeneratedImage, GeneratedVideo, GeneratedMedia
@@ -29,15 +29,13 @@ def _sleep(seconds):
 
 class Gemini:
     def __init__(self, secure_1psid=None, proxy=None, timeout=300000,
-                 auto_close=False, close_delay=300000, verbose=False,
-                 watchdog_timeout=30000):
+                 auto_close=False, close_delay=300000, verbose=False):
         self.cookies = {'__Secure-1PSID': secure_1psid} if secure_1psid else {}
         self.proxy = proxy
         self.verbose = verbose
         self.timeout = timeout
         self.auto_close = auto_close
         self.close_delay = close_delay
-        self.watchdog_timeout = watchdog_timeout
 
         self._ready = False
         self._guest = not bool(secure_1psid)
@@ -62,7 +60,9 @@ class Gemini:
             self._init_promise = None
 
     async def _do_init(self):
-        self._ready = True
+        # NOTE: _ready is only set to True after init succeeds, so concurrent
+        # callers awaiting _init_promise will not observe a half-initialized
+        # client.
         try:
             if self._guest:
                 await self._get_guest_cookie()
@@ -81,9 +81,9 @@ class Gemini:
                 if self.auto_close:
                     self._reset_close_task()
         except Exception as e:
-            self._ready = False
             await self.close()
             raise e
+        self._ready = True
 
     async def init(self):
         return await self._ensure()
@@ -463,10 +463,8 @@ class Gemini:
 
                 l_txt = ss.get('last_texts', {}) if ss else {}
                 l_thought = ss.get('last_thoughts', {}) if ss else {}
-                last_prog = time.time()
                 is_thinking = False
                 is_queueing = False
-                has_candidates = False
                 is_completed = False
                 is_final_chunk = False
                 cid = chat.cid if chat else ''
@@ -476,114 +474,104 @@ class Gemini:
                 yielded_outputs = []
 
                 async for chunk in res.aiter_text():
-                    try:
-                        parts = frame_parser.feed(chunk)
-                        for part in parts:
-                            ec = get_nested_value(part, [5, 2, 0, 1, 0])
-                            if ec:
-                                error_map = {
-                                    ErrorCode.USAGE_LIMIT_EXCEEDED: UsageLimitExceeded('Usage limit exceeded.'),
-                                    ErrorCode.MODEL_INCONSISTENT: ModelInvalid('Model inconsistent with conversation history.'),
-                                    ErrorCode.MODEL_HEADER_INVALID: ModelInvalid('Model unavailable or request structure outdated.'),
-                                    ErrorCode.IP_TEMPORARILY_BLOCKED: TemporarilyBlocked('IP temporarily blocked by Google.'),
-                                    ErrorCode.TEMPORARY_ERROR_1013: APIError('Temporary error (1013).'),
-                                    ErrorCode.FEATURE_NOT_AVAILABLE: UsageLimitExceeded('This feature is not available for your account plan.'),
-                                }
-                                raise error_map.get(ec, APIError(f'Unknown API error: {ec}'))
+                    parts = frame_parser.feed(chunk)
+                    for part in parts:
+                        ec = get_nested_value(part, [5, 2, 0, 1, 0])
+                        if ec:
+                            error_map = {
+                                ErrorCode.USAGE_LIMIT_EXCEEDED: UsageLimitExceeded('Usage limit exceeded.'),
+                                ErrorCode.MODEL_INCONSISTENT: ModelInvalid('Model inconsistent with conversation history.'),
+                                ErrorCode.MODEL_HEADER_INVALID: ModelInvalid('Model unavailable or request structure outdated.'),
+                                ErrorCode.IP_TEMPORARILY_BLOCKED: TemporarilyBlocked('IP temporarily blocked by Google.'),
+                                ErrorCode.TEMPORARY_ERROR_1013: APIError('Temporary error (1013).'),
+                                ErrorCode.FEATURE_NOT_AVAILABLE: UsageLimitExceeded('This feature is not available for your account plan.'),
+                            }
+                            raise error_map.get(ec, APIError(f'Unknown API error: {ec}'))
 
-                            inner_str = get_nested_value(part, [2])
-                            if not inner_str:
+                        inner_str = get_nested_value(part, [2])
+                        if not inner_str:
+                            continue
+                        try:
+                            pj = json.loads(inner_str)
+                        except (json.JSONDecodeError, ValueError):
+                            continue
+
+                        m_data = get_nested_value(pj, [1])
+                        if m_data:
+                            new_cid = get_nested_value(m_data, [0])
+                            new_rid = get_nested_value(m_data, [1])
+                            if new_cid:
+                                cid = new_cid
+                            if new_rid:
+                                rid = new_rid
+                            if chat:
+                                chat.metadata = m_data
+
+                        ctx = get_nested_value(pj, [25])
+                        if isinstance(ctx, str):
+                            is_final_chunk = True
+                            if chat:
+                                m = list(chat.metadata)
+                                m[9] = ctx
+                                chat.metadata = m
+
+                        clist = get_nested_value(pj, [4], [])
+                        if not clist or not len(clist):
+                            continue
+
+                        out_cands = []
+                        for i, cd in enumerate(clist):
+                            rcid = get_nested_value(cd, [0])
+                            if not rcid:
                                 continue
-                            try:
-                                pj = json.loads(inner_str)
-                            except (json.JSONDecodeError, ValueError):
-                                continue
+                            if chat:
+                                chat.rcid = rcid
 
-                            m_data = get_nested_value(pj, [1])
-                            if m_data:
-                                new_cid = get_nested_value(m_data, [0])
-                                new_rid = get_nested_value(m_data, [1])
-                                if new_cid:
-                                    cid = new_cid
-                                if new_rid:
-                                    rid = new_rid
-                                if chat:
-                                    chat.metadata = m_data
+                            text, thoughts, web_imgs, gen_imgs, gen_vids, gen_media = self._parse_candidate(cd, cid, rid, rcid)
 
-                            ctx = get_nested_value(pj, [25])
-                            if isinstance(ctx, str):
-                                is_final_chunk = True
-                                if chat:
-                                    m = list(chat.metadata)
-                                    m[9] = ctx
-                                    chat.metadata = m
+                            if not video_chip_uuid:
+                                entry65 = get_nested_value(cd, [12, 0, '65'])
+                                if isinstance(entry65, (list, tuple)) and len(entry65) >= 2:
+                                    video_chip_uuid = entry65[1]
 
-                            clist = get_nested_value(pj, [4], [])
-                            if not clist or not len(clist):
-                                continue
+                            indicator = get_nested_value(cd, [8, 0])
+                            is_completed = indicator == 2
 
-                            out_cands = []
-                            for i, cd in enumerate(clist):
-                                rcid = get_nested_value(cd, [0])
-                                if not rcid:
-                                    continue
-                                if chat:
-                                    chat.rcid = rcid
+                            last_sent_text = l_txt.get(rcid) or l_txt.get(f'idx_{i}') or ''
+                            td, nft = get_delta_by_fp_len(text, last_sent_text, is_completed or indicator is None)
+                            thdelta = ''
+                            nfth = ''
+                            if thoughts:
+                                last_sent_thought = l_thought.get(rcid) or l_thought.get(f'idx_{i}') or ''
+                                thdelta, nfth = get_delta_by_fp_len(thoughts, last_sent_thought, is_completed or indicator is None)
 
-                                text, thoughts, web_imgs, gen_imgs, gen_vids, gen_media = self._parse_candidate(cd, cid, rid, rcid)
+                            l_txt[rcid] = l_txt[f'idx_{i}'] = nft
+                            l_thought[rcid] = l_thought[f'idx_{i}'] = nfth
 
-                                if not video_chip_uuid:
-                                    entry65 = get_nested_value(cd, [12, 0, '65'])
-                                    if isinstance(entry65, (list, tuple)) and len(entry65) >= 2:
-                                        video_chip_uuid = entry65[1]
+                            dr_plan = None
+                            if deep_research:
+                                plan_data = extract_deep_research_plan(cd, text)
+                                if plan_data:
+                                    dr_plan = DeepResearchPlan(**plan_data)
+                                    dr_plan.cid = chat.cid if chat else None
 
-                                indicator = get_nested_value(cd, [8, 0])
-                                is_completed = indicator == 2
+                            out_cands.append(Candidate(
+                                rcid=rcid, index=i, text=text, text_delta=td,
+                                thoughts=thoughts or None, thoughts_delta=thdelta,
+                                web_images=web_imgs, generated_images=gen_imgs,
+                                generated_videos=gen_vids, generated_media=gen_media,
+                                deep_research_plan=dr_plan, done=is_completed,
+                            ))
 
-                                last_sent_text = l_txt.get(rcid) or l_txt.get(f'idx_{i}') or ''
-                                td, nft = get_delta_by_fp_len(text, last_sent_text, is_completed or indicator is None)
-                                thdelta = ''
-                                nfth = ''
-                                if thoughts:
-                                    last_sent_thought = l_thought.get(rcid) or l_thought.get(f'idx_{i}') or ''
-                                    thdelta, nfth = get_delta_by_fp_len(thoughts, last_sent_thought, is_completed or indicator is None)
-
-                                if td or thdelta or web_imgs or gen_imgs or gen_vids or gen_media:
-                                    has_candidates = True
-
-                                l_txt[rcid] = l_txt[f'idx_{i}'] = nft
-                                l_thought[rcid] = l_thought[f'idx_{i}'] = nfth
-
-                                dr_plan = None
-                                if deep_research:
-                                    from .utils.research import extract_deep_research_plan
-                                    plan_data = extract_deep_research_plan(cd, text)
-                                    if plan_data:
-                                        dr_plan = DeepResearchPlan(**plan_data)
-                                        dr_plan.cid = chat.cid if chat else None
-
-                                out_cands.append(Candidate(
-                                    rcid=rcid, index=i, text=text, text_delta=td,
-                                    thoughts=thoughts or None, thoughts_delta=thdelta,
-                                    web_images=web_imgs, generated_images=gen_imgs,
-                                    generated_videos=gen_vids, generated_media=gen_media,
-                                    deep_research_plan=dr_plan, done=is_completed,
-                                ))
-
-                            if out_cands:
-                                metadata = get_nested_value(pj, [1], [])
-                                out_obj = ModelOutput(
-                                    metadata, out_cands,
-                                    model=model.get('model_name', '') if isinstance(model, dict) else '',
-                                    gem=gem_id,
-                                )
-                                yielded_outputs.append(out_obj)
-                                yield out_obj
-
-                        if parts:
-                            last_prog = time.time()
-                    except Exception as e:
-                        raise e
+                        if out_cands:
+                            metadata = get_nested_value(pj, [1], [])
+                            out_obj = ModelOutput(
+                                metadata, out_cands,
+                                model=model.get('model_name', '') if isinstance(model, dict) else '',
+                                gem=gem_id,
+                            )
+                            yielded_outputs.append(out_obj)
+                            yield out_obj
 
                 remaining = frame_parser.flush()
                 for part in remaining:
@@ -749,8 +737,6 @@ class Gemini:
 
                 l_txt = ss.get('last_texts', {}) if ss else {}
                 frame_parser = StreamingFrameParser()
-                cid = chat.cid if chat else ''
-                rid = chat.rid if chat else ''
 
                 is_completed = False
 
@@ -777,10 +763,6 @@ class Gemini:
 
                         m_data = get_nested_value(pj, [1])
                         if m_data:
-                            if m_data[0]:
-                                cid = m_data[0]
-                            if m_data[1]:
-                                rid = m_data[1]
                             if chat:
                                 chat.metadata = m_data
 
@@ -1096,7 +1078,6 @@ class Gemini:
                     'f.req': json.dumps([[p.serialize() for p in payloads]]),
                 }
 
-                proxy_config = None
                 proxy_url = parse_proxy(self.proxy)
 
                 headers = {

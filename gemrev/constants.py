@@ -11,12 +11,22 @@ DEFAULT_METADATA = ['', '', '', None, None, None, None, None, None, '']
 MODEL_HEADER_KEY = 'x-goog-ext-525001261-jspb'
 
 
-def build_model_header(model_id, capacity_tail, model_number=1):
-    tail = str(capacity_tail)
+def build_model_header(model_id, capacity_tail, model_number=1, capacity_tail_extra=None):
+    """Build the model header dict sent to Gemini.
+
+    ``capacity_tail`` is placed at index 11 of the JSON array. When
+    ``capacity_tail_extra`` is not None (used for capacity_field == 13), it is
+    placed at index 11 as a two-element sequence ``[null, capacity]`` so the
+    resulting JSON contains two separate values instead of a single string.
+    """
+    if capacity_tail_extra is not None:
+        index_11 = [capacity_tail, capacity_tail_extra]
+    else:
+        index_11 = capacity_tail
     return {
         MODEL_HEADER_KEY: json.dumps([
             1, None, None, None, model_id, None, None, 0,
-            [4, 5, 6, 8], None, None, capacity_tail, None, None, model_number
+            [4, 5, 6, 8], None, None, index_11, None, None, model_number
         ]),
         'x-goog-ext-73010989-jspb': '[0]',
         'x-goog-ext-73010990-jspb': '[0,0,0]',

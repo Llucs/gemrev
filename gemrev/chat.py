@@ -1,4 +1,5 @@
 import json
+import re
 import uuid
 from .constants import DEFAULT_METADATA, Model
 
@@ -90,9 +91,8 @@ class ChatSession:
 
     @staticmethod
     def _parse_tool_calls(text):
-        import re as _re
         tool_calls = []
-        pattern = _re.compile(r'\[TOOL_CALL\](.+?)\[/TOOL_CALL\]', _re.DOTALL)
+        pattern = re.compile(r'\[TOOL_CALL\](.+?)\[/TOOL_CALL\]', re.DOTALL)
         for m in pattern.finditer(text):
             raw = m.group(1).strip()
             name = raw

@@ -1,6 +1,5 @@
 import httpx
 import re
-from urllib.parse import urlparse
 from ..constants import Endpoint, Headers
 from ..errors import AuthError
 
@@ -9,21 +8,68 @@ def cookie_str(cookies):
     return '; '.join(f'{k}={v}' for k, v in cookies.items())
 
 
+def _split_set_cookie_header(raw):
+    """Split a concatenated Set-Cookie header into individual cookie strings.
+
+    A comma inside a cookie value would naïvely break ``raw.split(',')``, but
+    cookies can contain a comma inside ``Expires=Wed, 21-Oct-2025 ...``. We
+    use the heuristic that a new cookie starts right after ``;`` (or after the
+    Expires value). See RFC 6265: cookies are separated by ``, `` but a comma
+    preceded by a digit/month inside an Expires attribute is part of the date.
+    """
+    if not raw:
+        return []
+    # A robust approach: split on commas followed by a cookie name pattern
+    # ("name="). Keeps dates intact because dates contain ", " followed by
+    # anything but "<name>=".
+    parts = []
+    buffer = ''
+    i = 0
+    n = len(raw)
+    while i < n:
+        comma_pos = raw.find(',', i)
+        if comma_pos == -1:
+            buffer += raw[i:]
+            break
+        # look-ahead: is the segment after the comma a new "<name>=" cookie?
+        next_segment = raw[comma_pos + 1:].lstrip()
+        # A cookie name typically starts with a token char and is followed by '='
+        # within a few characters. Expires dates contain ", HH:MM:SS" or
+        # similar (no '=' shortly after).
+        equals_pos = next_segment.find('=')
+        semicolon_pos = next_segment.find(';')
+        # if equal sign comes before any semicolon and reasonably close, treat
+        # comma as a separator
+        if (equals_pos != -1 and (semicolon_pos == -1 or equals_pos < semicolon_pos)
+                and equals_pos < 64 and re.match(r'[A-Za-z0-9_\-+.]+', next_segment)):
+            buffer += raw[i:comma_pos]
+            if buffer.strip():
+                parts.append(buffer)
+            buffer = ''
+            i = comma_pos + 1
+        else:
+            # comma is inside a value (e.g. date) — keep it
+            buffer += raw[i:comma_pos + 1]
+            i = comma_pos + 1
+    if buffer.strip():
+        parts.append(buffer)
+    return parts
+
+
 def parse_cookies(headers, base=None):
     out = dict(base or {})
     raw = headers.get('set-cookie') or ''
     if isinstance(raw, str):
-        for part in raw.split(','):
-            p = part.split(';')[0].strip()
-            if '=' in p:
-                k, v = p.split('=', 1)
-                out[k.strip()] = v.strip()
+        cookie_strs = _split_set_cookie_header(raw)
     elif isinstance(raw, (list, tuple)):
-        for s in raw:
-            p = s.split(';')[0].strip()
-            if '=' in p:
-                k, v = p.split('=', 1)
-                out[k.strip()] = v.strip()
+        cookie_strs = list(raw)
+    else:
+        cookie_strs = []
+    for s in cookie_strs:
+        p = s.split(';')[0].strip()
+        if '=' in p:
+            k, v = p.split('=', 1)
+            out[k.strip()] = v.strip()
     return out
 
 

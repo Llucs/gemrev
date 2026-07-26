@@ -3,6 +3,7 @@ import os
 import hashlib
 import re
 import time
+import asyncio
 
 
 def sanitize_filename(name, max_len=50):
@@ -171,6 +172,7 @@ class Video:
                 'Referer': 'https://gemini.google.com/',
                 **({'Cookie': cookie_str} if cookie_str else {}),
             },
+            follow_redirects=True,
             proxy=proxy_url,
         ) as client:
             res = await client.get(url)
@@ -203,6 +205,30 @@ class Video:
         else:
             raise ValueError(f'Error downloading file: {res.status_code}')
 
+    async def _poll_download(self, url, save_path, filename, ext, verbose, key,
+                             max_attempts=30, retry_interval=10):
+        """Poll a media URL until it is ready (not 206) or max_attempts is reached."""
+        attempts = 0
+        while attempts < max_attempts:
+            file_path = await self._download_file(url, save_path, filename, ext, verbose)
+            if file_path == '206':
+                attempts += 1
+                if verbose:
+                    print(f'Media ({key}) still generating (206), retrying in {retry_interval}s... (attempt {attempts}/{max_attempts})')
+                await asyncio.sleep(retry_interval)
+            else:
+                return file_path
+        raise TimeoutError(f'Media ({key}) generation timed out after {max_attempts} attempts.')
+
+    async def _download_thumbnail(self, url, save_path, filename, verbose):
+        try:
+            file_path = await self._download_file(url, save_path, filename, '.jpg', verbose)
+            return file_path if file_path != '206' else None
+        except Exception as e:
+            if verbose:
+                print(f'Failed to save thumbnail: {e}')
+            return None
+
 
 class GeneratedVideo(Video):
     def __init__(self, url='', thumbnail=None, cid='', rid='', rcid='',
@@ -221,25 +247,6 @@ class GeneratedVideo(Video):
             thumb_path = await self._download_thumbnail(self.thumbnail, save_path, filename + '_thumb', verbose)
         return {'video': video_path, 'video_thumbnail': thumb_path}
 
-    async def _poll_download(self, url, save_path, filename, ext, verbose, key):
-        while True:
-            file_path = await self._download_file(url, save_path, filename, ext, verbose)
-            if file_path == '206':
-                if verbose:
-                    print(f'Media ({key}) still generating (206), retrying in 10s...')
-                await asyncio_sleep(10)
-            else:
-                return file_path
-
-    async def _download_thumbnail(self, url, save_path, filename, verbose):
-        try:
-            file_path = await self._download_file(url, save_path, filename, '.jpg', verbose)
-            return file_path if file_path != '206' else None
-        except Exception as e:
-            if verbose:
-                print(f'Failed to save thumbnail: {e}')
-            return None
-
 
 class GeneratedMedia(Video):
     def __init__(self, url='', thumbnail=None, mp3_url='', mp3_thumbnail=None,
@@ -254,14 +261,13 @@ class GeneratedMedia(Video):
         self._default_filename_suffix = 'generated_media'
 
     async def _perform_save(self, save_path, filename, verbose):
-        import asyncio
         tasks = []
         if self.url:
             tasks.append(self._poll_download(self.url, save_path, filename, '.mp4', verbose, 'mp4'))
         if self.mp3_url:
             tasks.append(self._poll_download(self.mp3_url, save_path, filename, '.mp3', verbose, 'mp3'))
 
-        results = await asyncio.gather(*tasks)
+        results = await asyncio.gather(*tasks) if tasks else []
         out = {'mp4': None, 'mp3': None, 'mp4_thumbnail': None, 'mp3_thumbnail': None}
         idx = 0
         if self.url:
@@ -286,25 +292,6 @@ class GeneratedMedia(Video):
                 out['mp3_thumbnail'] = thumb_results[ti]
         return out
 
-    async def _poll_download(self, url, save_path, filename, ext, verbose, key):
-        while True:
-            file_path = await self._download_file(url, save_path, filename, ext, verbose)
-            if file_path == '206':
-                if verbose:
-                    print(f'Media ({key}) still generating (206), retrying in 10s...')
-                await asyncio_sleep(10)
-            else:
-                return file_path
-
-    async def _download_thumbnail(self, url, save_path, filename, verbose):
-        try:
-            file_path = await self._download_file(url, save_path, filename, '.jpg', verbose)
-            return file_path if file_path != '206' else None
-        except Exception as e:
-            if verbose:
-                print(f'Failed to save thumbnail: {e}')
-            return None
-
     def __repr__(self):
         urls = []
         if self.url:
@@ -312,8 +299,3 @@ class GeneratedMedia(Video):
         if self.mp3_url:
             urls.append(f'mp3={self.mp3_url}')
         return f"GeneratedMedia(title={self.title}, urls={', '.join(urls)})"
-
-
-def asyncio_sleep(seconds):
-    import asyncio
-    return asyncio.sleep(seconds)

@@ -9,7 +9,6 @@ Modo convidado (sem cookie - limitado a Flash, sem upload/histórico):
 """
 
 import asyncio
-import sys
 import argparse
 
 from gemrev import Gemini, Model

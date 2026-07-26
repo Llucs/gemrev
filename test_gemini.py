@@ -1,12 +1,10 @@
 import asyncio
 import json
 import re
-from gemrev import Gemini, Model, ChatSession, ModelOutput, Candidate, ErrorCode, ModeCategory
+from gemrev import Gemini, Model, ChatSession, ModelOutput, Candidate
 from gemrev import UsageLimitExceeded, ModelInvalid, TemporarilyBlocked
-from gemrev import ToolDefinition, ToolCall
 from gemrev.constants import (
-    Endpoint, GRPC, Headers, DEFAULT_METADATA, STREAMING_FLAG_INDEX,
-    GEM_FLAG_INDEX, TEMPORARY_CHAT_FLAG_INDEX, CARD_CONTENT_RE, ARTIFACTS_RE,
+    Endpoint, GRPC, Headers, DEFAULT_METADATA,
     MODEL_HEADER_KEY, build_model_header,
 )
 from gemrev.errors import AuthError, APIError, GeminiError
@@ -17,9 +15,8 @@ from gemrev.utils.parser import (
 )
 from gemrev.utils.research import (
     iter_nested, find_first_match, extract_research_id,
-    extract_deep_research_plan, extract_deep_research_status_payload,
+    extract_deep_research_plan,
 )
-from gemrev.types.output import Candidate, ModelOutput
 from gemrev.types.media import Image, WebImage, GeneratedImage, Video, GeneratedVideo, GeneratedMedia
 from gemrev.types.model import RPCData, AvailableModel
 from gemrev.types.gem import Gem, GemJar
@@ -159,13 +156,21 @@ def test_available_model():
     assert m.model_name == 'test-name'
     assert isinstance(m.model_header, dict)
     assert len(m.model_header) > 0
+    # capacity_field=12: capacity_tail must be an int in JSON, not a string
+    parsed = json.loads(m.model_header['x-goog-ext-525001261-jspb'])
+    assert isinstance(parsed[11], int), f'Expected int at index 11, got {type(parsed[11]).__name__}'
+    # capacity_field=13: must produce [null, capacity] as two separate values
+    m2 = AvailableModel(model_id='test', model_name='test2', capacity_field=13, capacity=3)
+    parsed2 = json.loads(m2.model_header['x-goog-ext-525001261-jspb'])
+    assert isinstance(parsed2[11], list), f'Expected list at index 11, got {type(parsed2[11]).__name__}'
+    assert parsed2[11] == [None, 3], f'Expected [None, 3], got {parsed2[11]}'
     print('  AvailableModel OK')
 
 
 def test_candidate():
     c = Candidate(rcid='rc_1', text='hello', index=0, done=True)
     assert c.text == 'hello'
-    assert c.done == True
+    assert c.done
     assert str(c) == 'hello'
     assert c.images == []
     assert c.videos == []
@@ -180,7 +185,7 @@ def test_model_output():
     assert out.rid == 'rid1'
     assert out.text == 'hello'
     assert out.rcid == 'rc_1'
-    assert out.done == True
+    assert out.done
     assert str(out) == 'hello'
     print('  ModelOutput OK')
 
@@ -206,7 +211,7 @@ def test_media():
     assert isinstance(gvid, Video)
     print('  GeneratedVideo OK')
 
-    med = GeneratedMedia(url='https://example.com/mp4', mp3_url='https://example.com/mp3')
+    GeneratedMedia(url='https://example.com/mp4', mp3_url='https://example.com/mp3')
     print('  GeneratedMedia OK')
 
 
@@ -230,7 +235,7 @@ def test_chat_types():
     assert hist.cid == 'c1'
 
     info = ChatInfo(cid='c2', title='Test Chat', is_pinned=True)
-    assert info.is_pinned == True
+    assert info.is_pinned
     print('  Chat types OK')
 
 
@@ -242,7 +247,7 @@ def test_research_types():
     assert status.state == 'running'
 
     result = DeepResearchResult(done=True)
-    assert result.done == True
+    assert result.done
     print('  Research types OK')
 
 
@@ -258,13 +263,13 @@ def test_research_utils():
 
 def test_gemini_client_creation():
     client = Gemini()
-    assert client._guest == True
+    assert client._guest
     assert client.cookies == {}
     assert client.timeout == 300000
     print('  Gemini client creation OK')
 
     client2 = Gemini(secure_1psid='test-cookie')
-    assert client2._guest == False
+    assert not client2._guest
     assert client2.cookies['__Secure-1PSID'] == 'test-cookie'
     print('  Gemini auth client OK')
 
@@ -278,7 +283,7 @@ def test_new_chat():
     print('  new_chat OK')
 
     chat2 = client.new_chat(model=Model.BASIC_FLASH, temporary=True)
-    assert chat2.temporary == True
+    assert chat2.temporary
     assert chat2.model['model_name'] == 'gemini-3-flash'
     print('  new_chat with options OK')
 

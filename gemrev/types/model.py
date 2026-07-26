@@ -1,4 +1,4 @@
-from ..constants import build_model_header, MODEL_HEADER_KEY
+from ..constants import build_model_header
 
 
 class RPCData:
@@ -28,11 +28,12 @@ class AvailableModel:
 
     @property
     def model_header(self):
+        # capacity_tail at index 11 in the JSON array must be a number (or null),
+        # not a string — otherwise Google's API rejects the header.
         if self.capacity_field == 13:
-            tail = f'null,{self.capacity}'
-        else:
-            tail = str(self.capacity)
-        return build_model_header(self.model_id, tail, self.model_number)
+            # Represented as two separate JSON values: null, <capacity>
+            return build_model_header(self.model_id, None, self.model_number, capacity_tail_extra=self.capacity)
+        return build_model_header(self.model_id, self.capacity, self.model_number)
 
     @property
     def advanced_only(self):
