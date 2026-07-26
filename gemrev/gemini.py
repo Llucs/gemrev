@@ -700,23 +700,39 @@ class Gemini:
             1, None, None, None, None, [1],
         ]
 
-        params = {'rpcids': 'StreamGenerate', 'hl': self.language or 'en-US', '_reqid': str(_reqid), 'rt': 'c', 'source-path': '/'}
+        body_data = {'f.req': json.dumps([None, json.dumps(inner)])}
+        uid = uuid.uuid4().hex.upper()
+        headers = {
+            'content-type': 'application/x-www-form-urlencoded;charset=UTF-8',
+            'x-goog-ext-525001261-jspb': json.dumps([1, None, None, None, 'fbb127bbb056c959', None, None, 0, [4, 6], None, None, 1, None, None, 1]),
+            'x-goog-ext-525005358-jspb': json.dumps([uid, 1]),
+            'x-goog-ext-73010989-jspb': '[0]',
+            'x-goog-ext-73010990-jspb': '[0,0,0]',
+            'x-same-domain': '1',
+            'origin': 'https://gemini.google.com',
+            'referer': 'https://gemini.google.com/',
+            'cookie': cookie_str(self.cookies),
+        }
+
+        proxy_url = parse_proxy(self.proxy)
+
+        params = {'hl': self.language or 'en-US', '_reqid': str(_reqid), 'rt': 'c'}
         if self.build_label:
             params['bl'] = self.build_label
         if self.session_id:
             params['f.sid'] = self.session_id
 
-        body_data = {'f.req': json.dumps([[['StreamGenerate', json.dumps(inner), None, 'generic']]])}
-
-        proxy_url = parse_proxy(self.proxy)
-
-        url = f"{Endpoint.BATCH_EXEC}?{urlencode(params)}"
+        url = f"{Endpoint.GENERATE}?{urlencode(params)}"
         async with httpx.AsyncClient(
+            headers=headers,
             timeout=httpx.Timeout(self.timeout / 1000.0),
             proxy=proxy_url,
         ) as client:
-            async with client.stream('POST', url, data=body_data) as res:
+            async with client.stream('POST', url, data=body_data, follow_redirects=False) as res:
                 if res.status_code != 200:
+                    if res.status_code == 302:
+                        loc = res.headers.get('location', 'unknown')
+                        print(f'[gemrev] 302 redirect to: {loc}')
                     raise APIError(f'Generate failed. Status: {res.status_code}')
 
                 new_cookies = parse_cookies(res.headers)
