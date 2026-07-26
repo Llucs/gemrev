@@ -1,21 +1,22 @@
 # GemRev
 
-An unofficial Python client for Google Gemini's web interface.
+Unofficial Python client for Google Gemini's web interface + OpenAI-compatible API server.
 
 ## Features
 
-- **Guest Mode** — Works without any Google account or cookies. Supports multi-turn chat sessions.
+- **Guest Mode** — Works without any Google account or cookies.
+- **OpenAI-Compatible API** — Drop-in replacement for OpenAI's `/v1/chat/completions`.
+- **Local Server** — Run `python app.py` for a full API server.
+- **CLI Mode** — Use `python -m gemrev` or `gemrev` directly.
+- **Universal Hosting** — Deploy on Vercel, Railway, Render, or any ASGI platform.
+- **Streaming** — SSE streaming compatible with OpenAI format.
+- **Multi-turn Chat** — Full conversation history support.
 - **Image Generation** — Generate and edit images with natural language.
 - **Video Generation** — Generate short videos from text prompts.
 - **Audio & Music Generation** — Generate audio and music content.
-- **Deep Research** — Full deep research workflow with plan creation, status polling, and result retrieval.
-- **Extended Thinking** — Enables deeper reasoning mode on supported models.
-- **System Prompt via Gems** — Customize the model's behavior with Gemini Gems.
-- **Extension Support** — Generate content with Gemini extensions (YouTube, Gmail, etc.).
-- **Classified Outputs** — Categorizes text, thoughts, images, videos, and audio in the response.
-- **Streaming Mode** — Stream generation with incremental stateful frame parsing.
+- **Deep Research** — Full deep research workflow.
+- **Extended Thinking** — Deeper reasoning mode on supported models.
 - **Tool/Function Calling** — Define and invoke tools in conversations.
-- **Mode Category Selection** — Simplified model selection via mode category (Fast, Thinking, Pro, Auto, etc.).
 
 ## Installation
 
@@ -23,71 +24,137 @@ An unofficial Python client for Google Gemini's web interface.
 pip install httpx
 ```
 
-## Quick Start
+For server mode:
+```bash
+pip install fastapi uvicorn pydantic
+```
 
-### Guest Mode (no account required)
+For everything:
+```bash
+pip install fastapi uvicorn pydantic tiktoken
+```
+
+## Usage
+
+### CLI (direct, no server)
+
+```bash
+# Guest mode
+python -m gemrev "Hello!" --stream
+
+# Authenticated
+python -m gemrev "Explain quantum computing" --cookie "YOUR__Secure-1PSID"
+
+# List models
+python -m gemrev --list-models
+
+# OpenAI-compatible JSON output
+python -m gemrev "Hello" --json
+```
+
+Or after `pip install -e .`:
+```bash
+gemrev "Hello" --stream --guest
+```
+
+### Local Server
+
+```bash
+python app.py
+# Server at http://localhost:8000
+
+# Custom port
+python app.py --port 8080
+```
+
+### API Endpoints
+
+**POST /v1/chat/completions** — OpenAI-compatible chat completions.
+
+```json
+{
+  "model": "gemini-3-flash",
+  "messages": [
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": "Hello!"}
+  ],
+  "stream": false,
+  "cookie": "__Secure-1PSID=abc123"
+}
+```
+
+Response:
+```json
+{
+  "id": "chatcmpl-abc123",
+  "object": "chat.completion",
+  "created": 1700000000,
+  "model": "gemini-3-flash",
+  "choices": [{
+    "index": 0,
+    "message": {"role": "assistant", "content": "Hello! How can I help you?"},
+    "finish_reason": "stop"
+  }],
+  "usage": {"prompt_tokens": 10, "completion_tokens": 8, "total_tokens": 18}
+}
+```
+
+**GET /v1/models** — List available models.
+
+**GET /health** — Health check.
+
+### Streaming (SSE)
+
+```bash
+curl -N http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"Count to 5."}],"stream":true}'
+```
+
+### Python Library
 
 ```python
 import asyncio
-from gemrev import Gemini
+from gemrev import Gemini, Model
 
 async def main():
-    client = Gemini()
-    chat = client.new_chat()
+    client = Gemini(secure_1psid="YOUR__Secure-1PSID")
+    chat = client.new_chat(model=Model.BASIC_FLASH)
     response = await chat.generate_content(prompt="Hello!")
     print(response.text)
 
 asyncio.run(main())
 ```
 
-### Authenticated Mode
+## Hosting
 
-```python
-from gemrev import Gemini, Model
+### Vercel
 
-client = Gemini(secure_1psid="YOUR__Secure-1PSID")
-chat = client.new_chat(model=Model.BASIC_FLASH)
-response = await chat.generate_content(prompt="Explain Python async/await.")
-print(response.text)
+Deploy the `api/` directory as serverless functions:
+
+```bash
+vercel deploy
 ```
 
-### Streaming
+Set environment variables:
+- `GEMINI_COOKIE` — Your `__Secure-1PSID` cookie
 
-```python
-chat = client.new_chat()
-async for chunk in chat.generate_content_stream(prompt="Tell me a story."):
-    if chunk.text_delta:
-        print(chunk.text_delta, end="")
+### Railway / Render
+
+```bash
+# Start command
+uvicorn gemrev.api.server:app --host 0.0.0.0 --port $PORT
 ```
 
-### Tool/Function Calling
+### Docker
 
-```python
-from gemrev import ToolDefinition
-
-chat = client.new_chat()
-response = await chat.generate_content(
-    prompt="What's the weather in Tokyo?",
-    tools=[ToolDefinition(name="get_weather", description="Get weather for a city")],
-)
-if response.candidates[0]._tool_calls:
-    print("Tool calls:", response.candidates[0]._tool_calls)
+```dockerfile
+FROM python:3.12
+WORKDIR /app
+COPY . .
+RUN pip install fastapi uvicorn pydantic httpx
+CMD ["uvicorn", "gemrev.api.server:app", "--host", "0.0.0.0", "--port", "8000"]
 ```
-
-## API Overview
-
-| Method | Description |
-|--------|-------------|
-| `Gemini()` | Create a client (guest if no cookie, authenticated with `secure_1psid`) |
-| `client.new_chat()` | Create a chat session |
-| `chat.generate_content()` | Send a prompt and get a response |
-| `chat.generate_content_stream()` | Stream a response |
-| `client.ask()` | One-shot prompt without creating a chat |
-| `client.models()` | List available models |
-| `client.chats()` | List recent conversations |
-| `client.read_chat(cid)` | Read conversation history |
-| `client.gems()` | List available Gems |
-| `client.research()` | Start a deep research query |
 
 ## Models
 

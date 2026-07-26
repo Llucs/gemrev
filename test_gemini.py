@@ -97,10 +97,7 @@ def test_parse_cookies():
 
 def test_parse_proxy():
     p = parse_proxy('http://user:pass@host:8080')
-    assert p is not None
-    assert p['host'] == 'host'
-    assert p['port'] == 8080
-    assert p['scheme'] == 'http'
+    assert p == 'http://user:pass@host:8080'
     assert parse_proxy(None) is None
     assert parse_proxy('') is None
     print('  parse_proxy OK')

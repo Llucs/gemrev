@@ -4,17 +4,25 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gemrev"
-version = "1.0.0"
-description = "Unofficial Python client for Google Gemini's web interface"
+version = "2.0.0"
+description = "Unofficial Google Gemini API client with OpenAI-compatible server"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Llucs" }]
 requires-python = ">=3.10"
 dependencies = ["httpx"]
 
+[project.optional-dependencies]
+server = ["fastapi>=0.100.0", "uvicorn>=0.20.0", "pydantic>=2.0.0"]
+all = ["fastapi>=0.100.0", "uvicorn>=0.20.0", "pydantic>=2.0.0", "tiktoken>=0.5.0"]
+dev = ["tiktoken>=0.5.0"]
+
 [project.urls]
 Homepage = "https://github.com/Llucs/gemrev"
 Repository = "https://github.com/Llucs/gemrev"
+
+[project.scripts]
+gemrev = "gemrev.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["gemrev", "gemrev.*"]
