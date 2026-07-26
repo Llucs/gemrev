@@ -92,29 +92,53 @@ class ChatSession:
     @staticmethod
     def _parse_tool_calls(text):
         tool_calls = []
-        pattern = re.compile(r'\[TOOL_CALL\](.+?)\[/TOOL_CALL\]', re.DOTALL)
-        for m in pattern.finditer(text):
+        COMPLETE_RE = re.compile(r'\[TOOL_CALL\](.+?)\[/TOOL_CALL\]', re.DOTALL)
+        INCOMPLETE_RE = re.compile(r'\[TOOL_CALL\](.+)$', re.DOTALL)
+
+        for m in COMPLETE_RE.finditer(text):
             raw = m.group(1).strip()
-            name = raw
-            args = {}
-            pipe_pos = raw.find('|')
-            if pipe_pos != -1:
-                name = raw[:pipe_pos].strip()
-                args_str = raw[pipe_pos + 1:].strip()
-                if args_str:
-                    try:
-                        args = json.loads(args_str)
-                    except (json.JSONDecodeError, ValueError):
-                        args = {}
-            if isinstance(args, dict):
-                args = json.dumps(args)
-            tool_calls.append({
-                'id': f'call_{uuid.uuid4().hex[:8]}',
-                'type': 'function',
-                'function': {'name': name, 'arguments': args},
-            })
-        clean = pattern.sub('', text).strip()
+            ChatSession._parse_single_tool_call(raw, tool_calls)
+        clean = COMPLETE_RE.sub('', text).strip()
+
+        # If no complete tool calls found, try to detect incomplete ones
+        # (missing [/TOOL_CALL] — response may have been truncated).
+        # This prevents the raw [TOOL_CALL]... text from leaking to the user.
+        if not tool_calls:
+            m = INCOMPLETE_RE.search(text)
+            if m:
+                raw = m.group(1).strip()
+                ChatSession._parse_single_tool_call(raw, tool_calls)
+                clean = text[:m.start()].strip()
+
         return clean, tool_calls
+
+    @staticmethod
+    def _parse_single_tool_call(raw, tool_calls):
+        name = raw
+        args = {}
+        pipe_pos = raw.find('|')
+        if pipe_pos != -1:
+            name = raw[:pipe_pos].strip()
+            args_str = raw[pipe_pos + 1:].strip()
+            if args_str:
+                try:
+                    args = json.loads(args_str)
+                except (json.JSONDecodeError, ValueError):
+                    # If the JSON is incomplete or invalid, treat the raw
+                    # string as the arguments payload so the caller can still
+                    # identify the tool name even with partial data.
+                    args = args_str
+        if isinstance(args, dict):
+            args = json.dumps(args)
+        elif isinstance(args, str):
+            args = json.dumps(args)
+        else:
+            args = '{}'
+        tool_calls.append({
+            'id': f'call_{uuid.uuid4().hex[:8]}',
+            'type': 'function',
+            'function': {'name': name, 'arguments': args},
+        })
 
     async def generate_content(self, prompt='', files=None, deep_research=False,
                                 extended_thinking=False, tools=None, messages=None,
