@@ -106,6 +106,8 @@ class ChatSession:
                         args = json.loads(args_str)
                     except (json.JSONDecodeError, ValueError):
                         args = {}
+            if isinstance(args, dict):
+                args = json.dumps(args)
             tool_calls.append({
                 'id': f'call_{uuid.uuid4().hex[:8]}',
                 'type': 'function',
