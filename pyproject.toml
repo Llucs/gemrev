@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gemrev"
+version = "1.0.0"
+description = "Unofficial Python client for Google Gemini's web interface"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Llucs" }]
+requires-python = ">=3.10"
+dependencies = ["httpx"]
+
+[project.urls]
+Homepage = "https://github.com/Llucs/gemrev"
+Repository = "https://github.com/Llucs/gemrev"
+
+[tool.setuptools.packages.find]
+include = ["gemrev", "gemrev.*"]
