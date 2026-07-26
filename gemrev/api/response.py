@@ -31,18 +31,41 @@ def _extract_model(result, fallback):
     return fallback
 
 
+def _extract_tool_calls(result):
+    if hasattr(result, 'candidates') and result.candidates:
+        chosen = getattr(result, 'chosen', 0)
+        if chosen < len(result.candidates):
+            tc = getattr(result.candidates[chosen], '_tool_calls', None)
+            if tc:
+                return tc
+    if isinstance(result, dict):
+        tc = result.get('tool_calls')
+        if tc:
+            return tc
+    return None
+
+
 def build_chat_response(result, prompt_text, model, system_fingerprint=None):
     now = int(time())
     msg_id = f'chatcmpl-{uuid4().hex[:16]}'
     text = _extract_text(result)
     actual_model = _extract_model(result, model)
+    tool_calls = _extract_tool_calls(result)
 
-    choice_msg = {'role': 'assistant', 'content': text}
+    choice_msg = {'role': 'assistant'}
+
+    if tool_calls:
+        choice_msg['content'] = None if not text else text
+        choice_msg['tool_calls'] = tool_calls
+        finish_reason = 'tool_calls'
+    else:
+        choice_msg['content'] = text
+        finish_reason = 'stop'
 
     choices = [{
         'index': 0,
         'message': choice_msg,
-        'finish_reason': 'stop',
+        'finish_reason': finish_reason,
     }]
 
     pt = _count_tokens(prompt_text)

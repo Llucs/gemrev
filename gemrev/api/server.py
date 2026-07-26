@@ -4,7 +4,7 @@ import os
 from time import time
 from uuid import uuid4
 
-from gemrev import Gemini, Model
+from gemrev import Gemini, Model, ToolDefinition
 
 logger = logging.getLogger('gemrev')
 
@@ -25,12 +25,23 @@ if FastAPI is not None:
         role: str
         content: str | None = None
 
+    class FunctionDef(BaseModel):
+        name: str
+        description: str = ''
+        parameters: dict = {}
+
+    class ToolDef(BaseModel):
+        type: str = 'function'
+        function: FunctionDef
+
     class ChatRequest(BaseModel):
         messages: list[Message]
         model: str = 'auto'
         stream: bool = False
         cookie: str | None = None
         proxy: str | None = None
+        tools: list[ToolDef] | None = None
+        tool_choice: str | None = None
 
     app = FastAPI(title='gemrev-api', version='2.0.0')
 
@@ -58,10 +69,18 @@ if FastAPI is not None:
                 pass
         return Model.UNSPECIFIED
 
-    def _model_name(model):
-        if isinstance(model, dict) and model.get('model_name'):
-            return model['model_name']
-        return 'auto'
+    def _to_tool_definitions(tools):
+        if not tools:
+            return None
+        result = []
+        for t in tools:
+            if t.type == 'function':
+                result.append(ToolDefinition(
+                    name=t.function.name,
+                    description=t.function.description,
+                    parameters=t.function.parameters,
+                ))
+        return result if result else None
 
     @app.post('/v1/chat/completions')
     async def chat_completions(req: ChatRequest):
@@ -85,6 +104,7 @@ if FastAPI is not None:
 
         model = _resolve_model(req.model)
         client = _get_client(req)
+        tools = _to_tool_definitions(req.tools)
 
         if req.stream:
             now = int(time())
@@ -98,28 +118,28 @@ if FastAPI is not None:
                     async for chunk in chat.generate_content_stream(
                         prompt=last_user.content or '',
                         messages=req.messages if len(req.messages) > 1 else None,
+                        tools=tools,
                     ):
                         if first:
                             resolved_model_holder[0] = chunk.model or req.model
-                            first_chunk = build_stream_chunk(
-                                msg_id, now, resolved_model_holder[0],
-                                {'role': 'assistant'},
-                            )
-                            yield f'data: {_json.dumps(first_chunk)}\n\n'
+                            yield f'data: {_json.dumps(build_stream_chunk(msg_id, now, resolved_model_holder[0], {"role": "assistant"}))}\n\n'
                             first = False
-                        if chunk.text_delta:
-                            c = build_stream_chunk(
+
+                        tc = getattr(getattr(chunk, 'candidates', [None])[0] if chunk.candidates else None, '_tool_calls', None) if hasattr(chunk, 'candidates') else None
+                        if tc:
+                            tc_chunk = build_stream_chunk(
                                 msg_id, now, resolved_model_holder[0],
-                                {'content': chunk.text_delta},
+                                {'tool_calls': tc}, 'tool_calls',
                             )
-                            yield f'data: {_json.dumps(c)}\n\n'
+                            yield f'data: {_json.dumps(tc_chunk)}\n\n'
+                            yield 'data: [DONE]\n\n'
+                            return
+
+                        if chunk.text_delta:
+                            yield f'data: {_json.dumps(build_stream_chunk(msg_id, now, resolved_model_holder[0], {"content": chunk.text_delta}))}\n\n'
                 except Exception as e:
                     logger.exception('stream failed')
-                last = build_stream_chunk(
-                    msg_id, now, resolved_model_holder[0],
-                    {}, 'stop',
-                )
-                yield f'data: {_json.dumps(last)}\n\n'
+                yield f'data: {_json.dumps(build_stream_chunk(msg_id, now, resolved_model_holder[0], {}, "stop"))}\n\n'
                 yield 'data: [DONE]\n\n'
 
             return StreamingResponse(stream(), media_type='text/event-stream')
@@ -128,6 +148,7 @@ if FastAPI is not None:
         result = await chat.generate_content(
             prompt=last_user.content or '',
             messages=req.messages if len(req.messages) > 1 else None,
+            tools=tools,
         )
         prompt_text = '\n'.join(f'{m.role}: {m.content}' for m in req.messages if m.content)
         return build_chat_response(result, prompt_text, req.model)
