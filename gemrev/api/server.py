@@ -31,10 +31,6 @@ if FastAPI is not None:
         stream: bool = False
         cookie: str | None = None
         proxy: str | None = None
-        temperature: float | None = None
-        top_p: float | None = None
-        max_tokens: int | None = None
-        extended: bool = False
 
     app = FastAPI(title='gemrev-api', version='2.0.0')
 
@@ -54,21 +50,6 @@ if FastAPI is not None:
             proxy=proxy if proxy else None,
         )
 
-    def _build_prompt(messages):
-        parts = []
-        for m in messages:
-            role = m.role
-            content = m.content or ''
-            if role == 'system':
-                parts.append(f'system: {content}')
-            elif role == 'user':
-                parts.append(f'user: {content}')
-            elif role == 'assistant':
-                parts.append(f'assistant: {content}')
-            elif role == 'tool':
-                parts.append(f'tool: {content}')
-        return '\n'.join(parts)
-
     def _resolve_model(model_name):
         if model_name and model_name != 'auto':
             try:
@@ -77,57 +58,79 @@ if FastAPI is not None:
                 pass
         return Model.UNSPECIFIED
 
+    def _model_name(model):
+        if isinstance(model, dict) and model.get('model_name'):
+            return model['model_name']
+        return 'auto'
+
     @app.post('/v1/chat/completions')
     async def chat_completions(req: ChatRequest):
         if not req.messages:
             return JSONResponse(
+                status_code=400,
                 content={'error': {'message': 'messages is required', 'type': 'invalid_request_error'}},
-                status_code=400,
             )
 
-        last_msg = next((m for m in reversed(req.messages) if m.role == 'user'), None)
-        if not last_msg:
+        last_user = None
+        for m in reversed(req.messages):
+            if m.role == 'user':
+                last_user = m
+                break
+
+        if not last_user:
             return JSONResponse(
-                content={'error': {'message': 'No user message found', 'type': 'invalid_request_error'}},
                 status_code=400,
+                content={'error': {'message': 'No user message found', 'type': 'invalid_request_error'}},
             )
 
-        prompt_text = _build_prompt(req.messages)
         model = _resolve_model(req.model)
-
         client = _get_client(req)
 
         if req.stream:
             now = int(time())
             msg_id = f'chatcmpl-{uuid4().hex[:16]}'
+            resolved_model_holder = [req.model]
 
             async def stream():
                 chat = client.new_chat(model=model)
-                yield f'data: {_json.dumps(build_stream_chunk(msg_id, now, req.model, {"role": "assistant", "content": ""}))}\n\n'
+                first = True
                 try:
                     async for chunk in chat.generate_content_stream(
-                        prompt=last_msg.content or '',
+                        prompt=last_user.content or '',
                         messages=req.messages if len(req.messages) > 1 else None,
                     ):
+                        if first:
+                            resolved_model_holder[0] = chunk.model or req.model
+                            first_chunk = build_stream_chunk(
+                                msg_id, now, resolved_model_holder[0],
+                                {'role': 'assistant'},
+                            )
+                            yield f'data: {_json.dumps(first_chunk)}\n\n'
+                            first = False
                         if chunk.text_delta:
-                            chunk_data = build_stream_chunk(msg_id, now, req.model, {'content': chunk.text_delta})
-                            yield f'data: {_json.dumps(chunk_data)}\n\n'
+                            c = build_stream_chunk(
+                                msg_id, now, resolved_model_holder[0],
+                                {'content': chunk.text_delta},
+                            )
+                            yield f'data: {_json.dumps(c)}\n\n'
                 except Exception as e:
                     logger.exception('stream failed')
-                chunk_data = build_stream_chunk(msg_id, now, req.model, {}, 'stop')
-                yield f'data: {_json.dumps(chunk_data)}\n\n'
+                last = build_stream_chunk(
+                    msg_id, now, resolved_model_holder[0],
+                    {}, 'stop',
+                )
+                yield f'data: {_json.dumps(last)}\n\n'
                 yield 'data: [DONE]\n\n'
 
             return StreamingResponse(stream(), media_type='text/event-stream')
 
         chat = client.new_chat(model=model)
         result = await chat.generate_content(
-            prompt=last_msg.content or '',
+            prompt=last_user.content or '',
             messages=req.messages if len(req.messages) > 1 else None,
         )
-
-        body = build_chat_response(result, prompt_text, req.model)
-        return body
+        prompt_text = '\n'.join(f'{m.role}: {m.content}' for m in req.messages if m.content)
+        return build_chat_response(result, prompt_text, req.model)
 
     @app.get('/v1/models')
     async def list_models():

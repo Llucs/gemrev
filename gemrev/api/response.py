@@ -15,60 +15,52 @@ def _system_fingerprint():
     return f"fp_{uuid4().hex[:16]}"
 
 
-def build_chat_response(
-    result,
-    prompt_text,
-    model,
-    system_fingerprint=None,
-):
+def _extract_text(result):
+    if hasattr(result, 'text'):
+        return result.text
+    if isinstance(result, dict):
+        return result.get('text', '')
+    return str(result)
+
+
+def _extract_model(result, fallback):
+    if hasattr(result, 'model') and result.model:
+        return result.model
+    if isinstance(result, dict) and result.get('model'):
+        return result['model']
+    return fallback
+
+
+def build_chat_response(result, prompt_text, model, system_fingerprint=None):
     now = int(time())
     msg_id = f'chatcmpl-{uuid4().hex[:16]}'
-
-    if hasattr(result, 'text'):
-        text = result.text
-    elif isinstance(result, dict):
-        text = result.get('text', '')
-    else:
-        text = str(result)
-
-    if hasattr(result, 'thoughts'):
-        reasoning = result.thoughts
-    elif isinstance(result, dict):
-        reasoning = result.get('reasoning') or result.get('thoughts')
-    else:
-        reasoning = None
-
-    finish_reason = 'stop'
+    text = _extract_text(result)
+    actual_model = _extract_model(result, model)
 
     choice_msg = {'role': 'assistant', 'content': text}
-    if reasoning:
-        choice_msg['reasoning_content'] = reasoning
 
     choices = [{
         'index': 0,
         'message': choice_msg,
-        'finish_reason': finish_reason,
+        'finish_reason': 'stop',
     }]
 
     pt = _count_tokens(prompt_text)
     ct = _count_tokens(text)
-    rt = _count_tokens(reasoning) if reasoning else 0
 
-    usage = {'prompt_tokens': pt, 'completion_tokens': ct, 'total_tokens': pt + ct}
-    if rt:
-        usage['completion_tokens_details'] = {'reasoning_tokens': rt}
-
-    body = {
+    return {
         'id': msg_id,
         'object': 'chat.completion',
         'created': now,
-        'model': model or 'gemini',
+        'model': actual_model,
         'choices': choices,
-        'usage': usage,
+        'usage': {
+            'prompt_tokens': pt,
+            'completion_tokens': ct,
+            'total_tokens': pt + ct,
+        },
         'system_fingerprint': system_fingerprint or _system_fingerprint(),
     }
-
-    return body
 
 
 def build_stream_chunk(msg_id, created, model, delta, finish_reason=None):
