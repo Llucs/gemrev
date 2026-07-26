@@ -92,14 +92,20 @@ class ChatSession:
     def _parse_tool_calls(text):
         import re as _re
         tool_calls = []
-        pattern = _re.compile(r'\[TOOL_CALL\]([^|]+)\|(\{.*?\})?\[/TOOL_CALL\]', _re.DOTALL)
+        pattern = _re.compile(r'\[TOOL_CALL\](.+?)\[/TOOL_CALL\]', _re.DOTALL)
         for m in pattern.finditer(text):
-            name = m.group(1).strip()
-            args_str = m.group(2)
-            try:
-                args = json.loads(args_str) if args_str else {}
-            except json.JSONDecodeError:
-                args = {}
+            raw = m.group(1).strip()
+            name = raw
+            args = {}
+            pipe_pos = raw.find('|')
+            if pipe_pos != -1:
+                name = raw[:pipe_pos].strip()
+                args_str = raw[pipe_pos + 1:].strip()
+                if args_str:
+                    try:
+                        args = json.loads(args_str)
+                    except (json.JSONDecodeError, ValueError):
+                        args = {}
             tool_calls.append({
                 'id': f'call_{uuid.uuid4().hex[:8]}',
                 'type': 'function',
