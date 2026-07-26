@@ -688,29 +688,32 @@ class Gemini:
         self._reqid += 100000
 
         chat_meta = list(chat.metadata) if chat else list(DEFAULT_METADATA)
-        inner = [
-            [prompt, 0, None, None, None, None, 0],
-            [self.language or 'en-US'],
-            chat_meta, None, None, None, [1], 1, None, None, 1, 0,
-            None, None, None, None, None, [[0]], 1,
-            None, None, None, None, None,
-            ['', '', '', None, None, None, None, None, 0, None, 1, None, None, None, []],
-            None, None, 1, None, None, None, None, None, None, None,
-            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
-            1, None, None, None, None, [1],
-        ]
+        inner = [None] * 80
+        inner[0] = [prompt, 0, None, None, None, None, 0]
+        inner[1] = [self.language or 'en-US']
+        inner[2] = chat_meta
+        inner[6] = [0]
+        inner[7] = 1
+        inner[10] = 1
+        inner[11] = 0
+        inner[17] = [[0]]
+        inner[18] = 0
+        inner[27] = 1
+        inner[30] = [4]
+        inner[41] = [2]
+        inner[53] = 0
+        inner[59] = str(uuid.uuid4())
+        inner[61] = []
+        inner[68] = 1
+        inner[79] = 1
 
-        body_data = {'f.req': json.dumps([None, json.dumps(inner)])}
-        uid = uuid.uuid4().hex.upper()
+        body_data = urlencode({'f.req': json.dumps([None, json.dumps(inner)])})
         headers = {
-            'content-type': 'application/x-www-form-urlencoded;charset=UTF-8',
-            'x-goog-ext-525001261-jspb': json.dumps([1, None, None, None, 'fbb127bbb056c959', None, None, 0, [4, 6], None, None, 1, None, None, 1]),
-            'x-goog-ext-525005358-jspb': json.dumps([uid, 1]),
-            'x-goog-ext-73010989-jspb': '[0]',
-            'x-goog-ext-73010990-jspb': '[0,0,0]',
-            'x-same-domain': '1',
+            'content-type': 'application/x-www-form-urlencoded',
             'origin': 'https://gemini.google.com',
-            'referer': 'https://gemini.google.com/',
+            'referer': 'https://gemini.google.com/app',
+            'x-same-domain': '1',
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'cookie': cookie_str(self.cookies),
         }
 
