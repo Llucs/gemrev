@@ -700,28 +700,18 @@ class Gemini:
             1, None, None, None, None, [1],
         ]
 
-        params = {'rpcids': 'StreamGenerate', 'hl': self.language or 'en-US', '_reqid': str(_reqid), 'rt': 'c', 'source-path': '/app'}
+        params = {'rpcids': 'StreamGenerate', 'hl': self.language or 'en-US', '_reqid': str(_reqid), 'rt': 'c', 'source-path': '/'}
         if self.build_label:
             params['bl'] = self.build_label
         if self.session_id:
             params['f.sid'] = self.session_id
 
-        body_data = {
-            'at': self.access_token or '',
-            'f.req': json.dumps([[['StreamGenerate', json.dumps(inner), None, 'generic']]]),
-        }
+        body_data = {'f.req': json.dumps([[['StreamGenerate', json.dumps(inner), None, 'generic']]])}
 
         proxy_url = parse_proxy(self.proxy)
 
         url = f"{Endpoint.BATCH_EXEC}?{urlencode(params)}"
-        headers = {
-            **Headers.GEMINI,
-            **Headers.BATCH_EXEC,
-            **Headers.SAME_DOMAIN,
-            'Cookie': cookie_str(self.cookies),
-        }
         async with httpx.AsyncClient(
-            headers=headers,
             timeout=httpx.Timeout(self.timeout / 1000.0),
             proxy=proxy_url,
         ) as client:
