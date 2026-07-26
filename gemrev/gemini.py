@@ -700,29 +700,26 @@ class Gemini:
             1, None, None, None, None, [1],
         ]
 
-        uid = uuid.uuid4().hex.upper()
-        params = {'hl': self.language or 'en-US', '_reqid': str(_reqid), 'rt': 'c'}
+        params = {'rpcids': 'StreamGenerate', 'hl': self.language or 'en-US', '_reqid': str(_reqid), 'rt': 'c', 'source-path': '/app'}
         if self.build_label:
             params['bl'] = self.build_label
         if self.session_id:
             params['f.sid'] = self.session_id
 
-        body_data = {'f.req': json.dumps([None, json.dumps(inner)])}
-        headers = {
-            'content-type': 'application/x-www-form-urlencoded;charset=UTF-8',
-            'x-goog-ext-525001261-jspb': json.dumps([1, None, None, None, 'fbb127bbb056c959', None, None, 0, [4, 6], None, None, 1, None, None, 1]),
-            'x-goog-ext-525005358-jspb': json.dumps([uid, 1]),
-            'x-goog-ext-73010989-jspb': '[0]',
-            'x-goog-ext-73010990-jspb': '[0,0,0]',
-            'x-same-domain': '1',
-            'origin': 'https://gemini.google.com',
-            'referer': 'https://gemini.google.com/',
-            'cookie': cookie_str(self.cookies),
+        body_data = {
+            'at': self.access_token or '',
+            'f.req': json.dumps([[['StreamGenerate', json.dumps(inner), None, 'generic']]]),
         }
 
         proxy_url = parse_proxy(self.proxy)
 
-        url = f"{Endpoint.GENERATE}?{urlencode(params)}"
+        url = f"{Endpoint.BATCH_EXEC}?{urlencode(params)}"
+        headers = {
+            **Headers.GEMINI,
+            **Headers.BATCH_EXEC,
+            **Headers.SAME_DOMAIN,
+            'Cookie': cookie_str(self.cookies),
+        }
         async with httpx.AsyncClient(
             headers=headers,
             timeout=httpx.Timeout(self.timeout / 1000.0),
